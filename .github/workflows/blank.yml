@@ -59,11 +59,24 @@ jobs:
           cat << 'EOF' > bot.js
           const mineflayer = require('mineflayer');
           const fs = require('fs');
+
+          // Handle uncaught errors to prevent crashes
+          process.on('uncaughtException', (err) => {
+              console.error('Uncaught Exception:', err.message);
+              console.log('Bot will restart in 10s...');
+              setTimeout(startBot, 10000);
+          });
+
+          process.on('unhandledRejection', (reason, promise) => {
+              console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+          });
+
           const botOptions = {
               host: 'ahsmpw.falixsrv.me',
               port: 21987,
               username: 'afkbot',
-              version: false
+              version: false,
+              hideErrors: true  // Hide parse errors
           };
           const password = 'afkbot';
 
@@ -72,67 +85,101 @@ jobs:
           const OVERLAP_MS = 2 * 60 * 1000; // Trigger next run 2 minutes before end
           let shutdownInitiated = false;
           let nextRunTriggered = false;
+          let bot = null;
 
           function startBot() {
-              const bot = mineflayer.createBot(botOptions);
+              try {
+                  bot = mineflayer.createBot(botOptions);
 
-              bot.on('message', (message) => {
-                  const msg = message.toString().toLowerCase();
-                  if (msg.includes('register')) {
-                      bot.chat(`/register ${password} ${password}`);
-                  } else if (msg.includes('login') || msg.includes('log in')) {
-                      bot.chat(`/login ${password}`);
-                  }
-              });
+                  // Handle chat with try-catch to prevent parse errors from crashing
+                  bot.on('message', (message) => {
+                      try {
+                          const msg = message.toString().toLowerCase();
+                          console.log('[CHAT]', msg.substring(0, 100)); // Log chat for debugging
 
-              // Jump every 60 seconds to prevent AFK kick
-              const jumpInterval = setInterval(() => {
-                  if (bot.entity && !shutdownInitiated) {
-                      bot.setControlState('jump', true);
-                      setTimeout(() => bot.setControlState('jump', false), 500);
-                  }
-              }, 60000);
+                          if (msg.includes('register')) {
+                              bot.chat(`/register ${password} ${password}`);
+                          } else if (msg.includes('login') || msg.includes('log in')) {
+                              bot.chat(`/login ${password}`);
+                          }
+                      } catch (chatErr) {
+                          console.error('Chat parsing error (ignored):', chatErr.message);
+                      }
+                  });
 
-              // Monitor runtime - trigger next run 2 minutes before ending
-              const checkInterval = setInterval(() => {
-                  const elapsed = Date.now() - startTime;
+                  // Jump every 60 seconds to prevent AFK kick
+                  const jumpInterval = setInterval(() => {
+                      try {
+                          if (bot.entity && !shutdownInitiated) {
+                              bot.setControlState('jump', true);
+                              setTimeout(() => bot.setControlState('jump', false), 500);
+                          }
+                      } catch (e) {
+                          console.error('Jump error:', e.message);
+                      }
+                  }, 60000);
 
-                  // Trigger next run 2 minutes before we quit (at 4 hours 58 minutes)
-                  if (elapsed >= (RUNTIME_MS - OVERLAP_MS) && !nextRunTriggered) {
-                      nextRunTriggered = true;
-                      console.log('\n[TRIGGER] 4 hours 58 minutes reached - Starting next workflow early...');
+                  // Monitor runtime - trigger next run 2 minutes before ending
+                  const checkInterval = setInterval(() => {
+                      const elapsed = Date.now() - startTime;
 
-                      // Create signal file to trigger next run
-                      fs.writeFileSync('.trigger_next_run', process.env.GITHUB_RUN_ID || 'unknown');
-                  }
+                      // Trigger next run 2 minutes before we quit (at 4 hours 58 minutes)
+                      if (elapsed >= (RUNTIME_MS - OVERLAP_MS) && !nextRunTriggered) {
+                          nextRunTriggered = true;
+                          console.log('\n[TRIGGER] 4 hours 58 minutes reached - Starting next workflow early...');
 
-                  // Graceful shutdown at exactly 5 hours
-                  if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
-                      shutdownInitiated = true;
-                      console.log('\n[TIMEOUT] 5 hours reached. Disconnecting...');
+                          // Create signal file to trigger next run
+                          fs.writeFileSync('.trigger_next_run', process.env.GITHUB_RUN_ID || 'unknown');
+                      }
 
-                      fs.writeFileSync('.shutdown_complete', Date.now().toString());
+                      // Graceful shutdown at exactly 5 hours
+                      if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
+                          shutdownInitiated = true;
+                          console.log('\n[TIMEOUT] 5 hours reached. Disconnecting...');
 
+                          fs.writeFileSync('.shutdown_complete', Date.now().toString());
+
+                          clearInterval(jumpInterval);
+                          clearInterval(checkInterval);
+
+                          try {
+                              bot.quit('Scheduled restart after 5 hours');
+                          } catch (e) {
+                              console.log('Bot already disconnected');
+                          }
+
+                          setTimeout(() => process.exit(0), 2000);
+                      }
+                  }, 30000); // Check every 30 seconds
+
+                  bot.on('end', () => {
                       clearInterval(jumpInterval);
                       clearInterval(checkInterval);
-                      bot.quit('Scheduled restart after 5 hours');
+                      if (!shutdownInitiated) {
+                          console.log('Bot disconnected unexpectedly, reconnecting in 5s...');
+                          setTimeout(startBot, 5000);
+                      }
+                  });
 
-                      setTimeout(() => process.exit(0), 2000);
-                  }
-              }, 30000); // Check every 30 seconds
+                  bot.on('error', (err) => {
+                      console.error('Bot error:', err.message);
+                      if (!shutdownInitiated) {
+                          console.log('Restarting due to error in 10s...');
+                          setTimeout(startBot, 10000);
+                      }
+                  });
 
-              bot.on('end', () => {
-                  clearInterval(jumpInterval);
-                  clearInterval(checkInterval);
-                  if (!shutdownInitiated) {
-                      console.log('Bot disconnected unexpectedly, reconnecting in 5s...');
-                      setTimeout(startBot, 5000);
-                  }
-              });
+                  bot.on('kicked', (reason, loggedIn) => {
+                      console.log('Kicked:', reason, '- Logged in:', loggedIn);
+                      if (!shutdownInitiated) {
+                          setTimeout(startBot, 10000);
+                      }
+                  });
 
-              bot.on('error', (err) => {
-                  console.error('Bot error:', err.message);
-              });
+              } catch (startErr) {
+                  console.error('Failed to start bot:', startErr.message);
+                  setTimeout(startBot, 10000);
+              }
           }
 
           startBot();
@@ -208,18 +255,4 @@ jobs:
               cat trigger_payload.json
 
               # Use GitHub API to trigger workflow_dispatch
-              curl -X POST                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"                 -H "Accept: application/vnd.github.v3+json"                 -H "Content-Type: application/json"                 -d @trigger_payload.json                 "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches"
-
-              echo ""
-              echo "✅ Triggered attempt #$NEXT_ATTEMPT (will wait for run $CURRENT_RUN_ID to finish)"
-          else
-              echo "No trigger signal found - not triggering next run"
-          fi
-        continue-on-error: true
-
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -f .trigger_next_run .shutdown_complete .next_run_should_wait_for trigger_payload.json
-          echo "\n=== Attempt #${{ github.event.inputs.resume_attempt || '1' }} Finished ==="
-          echo "Next run should have been triggered and is waiting for this one to complete"
+              curl -X POST                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"                 -H "Accept: application/vnd.github.v3+json"                 -H "Content-Type: application/json"                 -d @trigger_payload.json                 "https://api.github.com/repos/${{ github.repository }}/actions/workflow<response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
