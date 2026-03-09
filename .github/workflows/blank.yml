@@ -201,7 +201,7 @@ jobs:
                     "resume_attempt": "$NEXT_ATTEMPT",
                     "previous_run_id": "$CURRENT_RUN_ID"
                   }
-                }"                 "https://api.github.com/repos/${{ github.repository }}/actions/workflows/Mineflayer-AFK-Bot.yml/dispatches"
+                }"                 "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches"
 
               echo "✅ Triggered attempt #$NEXT_ATTEMPT (will wait for run $CURRENT_RUN_ID to finish)"
           else
