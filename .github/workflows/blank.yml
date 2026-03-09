@@ -17,12 +17,12 @@ permissions:
 
 env:
   RUNTIME_HOURS: 5
-  OVERLAP_MINUTES: 2  # Trigger new run 2 minutes before current ends
+  OVERLAP_MINUTES: 2
 
 jobs:
   run-mineflayer:
     runs-on: ubuntu-latest
-    timeout-minutes: 310  # 5 hours + 10 minutes buffer
+    timeout-minutes: 310
 
     steps:
       - name: Wait for previous run to finish (if applicable)
@@ -31,7 +31,6 @@ jobs:
           PREV_ID="${{ github.event.inputs.previous_run_id }}"
           echo "Waiting for previous run (ID: $PREV_ID) to complete..."
 
-          # Poll GitHub API until previous run is completed
           while true; do
             STATUS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"               -H "Accept: application/vnd.github.v3+json"               "https://api.github.com/repos/${{ github.repository }}/actions/runs/$PREV_ID"               | jq -r '.status')
 
@@ -60,126 +59,94 @@ jobs:
           const mineflayer = require('mineflayer');
           const fs = require('fs');
 
-          // Handle uncaught errors to prevent crashes
-          process.on('uncaughtException', (err) => {
-              console.error('Uncaught Exception:', err.message);
-              console.log('Bot will restart in 10s...');
-              setTimeout(startBot, 10000);
-          });
-
-          process.on('unhandledRejection', (reason, promise) => {
-              console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-          });
-
           const botOptions = {
               host: 'ahsmpw.falixsrv.me',
               port: 21987,
               username: 'afkbot',
               version: false,
-              hideErrors: true  // Hide parse errors
+              hideErrors: true
           };
           const password = 'afkbot';
 
           const startTime = Date.now();
-          const RUNTIME_MS = 5 * 60 * 60 * 1000; // 5 hours
-          const OVERLAP_MS = 2 * 60 * 1000; // Trigger next run 2 minutes before end
+          const RUNTIME_MS = 5 * 60 * 60 * 1000;
+          const OVERLAP_MS = 2 * 60 * 1000;
           let shutdownInitiated = false;
           let nextRunTriggered = false;
+          let wasKicked = false;
           let bot = null;
 
           function startBot() {
-              try {
-                  bot = mineflayer.createBot(botOptions);
+              if (shutdownInitiated) return;
 
-                  // Handle chat with try-catch to prevent parse errors from crashing
-                  bot.on('message', (message) => {
-                      try {
-                          const msg = message.toString().toLowerCase();
-                          console.log('[CHAT]', msg.substring(0, 100)); // Log chat for debugging
+              bot = mineflayer.createBot(botOptions);
 
-                          if (msg.includes('register')) {
-                              bot.chat(`/register ${password} ${password}`);
-                          } else if (msg.includes('login') || msg.includes('log in')) {
-                              bot.chat(`/login ${password}`);
-                          }
-                      } catch (chatErr) {
-                          console.error('Chat parsing error (ignored):', chatErr.message);
+              bot.on('message', (message) => {
+                  try {
+                      const msg = message.toString().toLowerCase();
+                      if (msg.includes('register')) {
+                          bot.chat(`/register ${password} ${password}`);
+                      } else if (msg.includes('login') || msg.includes('log in')) {
+                          bot.chat(`/login ${password}`);
                       }
-                  });
+                  } catch (e) {}
+              });
 
-                  // Jump every 60 seconds to prevent AFK kick
-                  const jumpInterval = setInterval(() => {
-                      try {
-                          if (bot.entity && !shutdownInitiated) {
-                              bot.setControlState('jump', true);
-                              setTimeout(() => bot.setControlState('jump', false), 500);
-                          }
-                      } catch (e) {
-                          console.error('Jump error:', e.message);
+              const jumpInterval = setInterval(() => {
+                  try {
+                      if (bot.entity && !shutdownInitiated) {
+                          bot.setControlState('jump', true);
+                          setTimeout(() => bot.setControlState('jump', false), 500);
                       }
-                  }, 60000);
+                  } catch (e) {}
+              }, 60000);
 
-                  // Monitor runtime - trigger next run 2 minutes before ending
-                  const checkInterval = setInterval(() => {
-                      const elapsed = Date.now() - startTime;
+              const checkInterval = setInterval(() => {
+                  const elapsed = Date.now() - startTime;
 
-                      // Trigger next run 2 minutes before we quit (at 4 hours 58 minutes)
-                      if (elapsed >= (RUNTIME_MS - OVERLAP_MS) && !nextRunTriggered) {
-                          nextRunTriggered = true;
-                          console.log('\n[TRIGGER] 4 hours 58 minutes reached - Starting next workflow early...');
+                  if (elapsed >= (RUNTIME_MS - OVERLAP_MS) && !nextRunTriggered) {
+                      nextRunTriggered = true;
+                      console.log('[TRIGGER] 4h 58m - Starting next workflow');
+                      fs.writeFileSync('.trigger_next_run', process.env.GITHUB_RUN_ID || 'unknown');
+                  }
 
-                          // Create signal file to trigger next run
-                          fs.writeFileSync('.trigger_next_run', process.env.GITHUB_RUN_ID || 'unknown');
-                      }
-
-                      // Graceful shutdown at exactly 5 hours
-                      if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
-                          shutdownInitiated = true;
-                          console.log('\n[TIMEOUT] 5 hours reached. Disconnecting...');
-
-                          fs.writeFileSync('.shutdown_complete', Date.now().toString());
-
-                          clearInterval(jumpInterval);
-                          clearInterval(checkInterval);
-
-                          try {
-                              bot.quit('Scheduled restart after 5 hours');
-                          } catch (e) {
-                              console.log('Bot already disconnected');
-                          }
-
-                          setTimeout(() => process.exit(0), 2000);
-                      }
-                  }, 30000); // Check every 30 seconds
-
-                  bot.on('end', () => {
+                  if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
+                      shutdownInitiated = true;
+                      console.log('[TIMEOUT] 5 hours - Disconnecting');
+                      fs.writeFileSync('.shutdown_complete', Date.now().toString());
                       clearInterval(jumpInterval);
                       clearInterval(checkInterval);
-                      if (!shutdownInitiated) {
-                          console.log('Bot disconnected unexpectedly, reconnecting in 5s...');
-                          setTimeout(startBot, 5000);
-                      }
-                  });
+                      try { bot.quit('Scheduled restart'); } catch (e) {}
+                      setTimeout(() => process.exit(0), 2000);
+                  }
+              }, 30000);
 
-                  bot.on('error', (err) => {
-                      console.error('Bot error:', err.message);
-                      if (!shutdownInitiated) {
-                          console.log('Restarting due to error in 10s...');
-                          setTimeout(startBot, 10000);
-                      }
-                  });
+              bot.on('kicked', (reason) => {
+                  console.log(`[KICKED] ${reason} - Will reconnect in 30s`);
+                  wasKicked = true;
+                  clearInterval(jumpInterval);
+                  clearInterval(checkInterval);
 
-                  bot.on('kicked', (reason, loggedIn) => {
-                      console.log('Kicked:', reason, '- Logged in:', loggedIn);
+                  setTimeout(() => {
                       if (!shutdownInitiated) {
-                          setTimeout(startBot, 10000);
+                          wasKicked = false;
+                          startBot();
                       }
-                  });
+                  }, 30000);
+              });
 
-              } catch (startErr) {
-                  console.error('Failed to start bot:', startErr.message);
-                  setTimeout(startBot, 10000);
-              }
+              bot.on('end', () => {
+                  clearInterval(jumpInterval);
+                  clearInterval(checkInterval);
+
+                  if (wasKicked && !shutdownInitiated) {
+                      console.log('[RECONNECT] Reconnecting after kick...');
+                      wasKicked = false;
+                      startBot();
+                  }
+              });
+
+              bot.on('error', () => {});
           }
 
           startBot();
@@ -197,19 +164,15 @@ jobs:
           echo "Will trigger next run at 4h 58min, shutdown at 5 hours"
           echo "=========================================="
 
-          # Start bot in background
           export GITHUB_RUN_ID="${{ github.run_id }}"
           node bot.js &
           BOT_PID=$!
 
-          # Monitor for trigger signal (at 4h 58min)
           NEXT_TRIGGERED=false
           while kill -0 $BOT_PID 2>/dev/null; do
               if [ -f ".trigger_next_run" ] && [ "$NEXT_TRIGGERED" = "false" ]; then
                   NEXT_TRIGGERED=true
                   echo "\n[MONITOR] Trigger signal detected! Will trigger next run now..."
-
-                  # Save the run ID for next run to wait for
                   echo "${{ github.run_id }}" > .next_run_should_wait_for
               fi
               sleep 1
@@ -232,7 +195,6 @@ jobs:
         if: always()
         id: trigger_next
         run: |
-          # Check if we should trigger next run
           if [ -f ".trigger_next_run" ] || [ -f ".next_run_should_wait_for" ]; then
               echo "Triggering next workflow run..."
 
@@ -240,7 +202,6 @@ jobs:
               NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
               CURRENT_RUN_ID="${{ github.run_id }}"
 
-              # Create JSON payload file to avoid escaping issues
               cat > trigger_payload.json << EOF
           {
             "ref": "${{ github.ref }}",
@@ -254,5 +215,18 @@ jobs:
               echo "Payload contents:"
               cat trigger_payload.json
 
-              # Use GitHub API to trigger workflow_dispatch
-              curl -X POST                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"                 -H "Accept: application/vnd.github.v3+json"                 -H "Content-Type: application/json"                 -d @trigger_payload.json                 "https://api.github.com/repos/${{ github.repository }}/actions/workflow<response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
+              curl -X POST                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"                 -H "Accept: application/vnd.github.v3+json"                 -H "Content-Type: application/json"                 -d @trigger_payload.json                 "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches"
+
+              echo ""
+              echo "✅ Triggered attempt #$NEXT_ATTEMPT (will wait for run $CURRENT_RUN_ID to finish)"
+          else
+              echo "No trigger signal found - not triggering next run"
+          fi
+        continue-on-error: true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f .trigger_next_run .shutdown_complete .next_run_should_wait_for trigger_payload.json
+          echo "\n=== Attempt #${{ github.event.inputs.resume_attempt || '1' }} Finished ==="
+          echo "Next run should have been triggered and is waiting for this one to complete"
