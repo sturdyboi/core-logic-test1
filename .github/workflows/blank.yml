@@ -16,8 +16,8 @@ jobs:
           cat << 'EOF' > bot.js
           const mineflayer = require('mineflayer');
           const botOptions = {
-              host: 'ahsmpw.falixsrv.me',
-              port: 21987,
+              host: 'pathborn.aternos.me',
+              port: 38926,
               username: 'afkbot',
               version: '1.20.1'
           };
