@@ -7,57 +7,46 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Create Bot Files
+      - name: Create Bot Script
         run: |
-          # Create the Mineflayer script
           cat << 'EOF' > bot.js
-          const mineflayer = require('mineflayer')
-
-          const bot = mineflayer.createBot({
-            host: 'ahsmpw.falixsrv.me',
-            port: 21987,
-            username: 'afkbot',
-            version: '1.20.1' // Match your server version
-          })
-
-          bot.on('spawn', () => {
-            console.log('Bot spawned in the server.')
-            // Wait 3 seconds then login
-            setTimeout(() => {
-              bot.chat('/login afkbot')
-              console.log('Sent login command.')
-            }, 3000)
-          })
-
-          // Anti-AFK: Move slightly every 60 seconds
-          setInterval(() => {
-            bot.setControlState('jump', true)
-            setTimeout(() => bot.setControlState('jump', false), 500)
-          }, 60000)
-
-          bot.on('chat', (username, message) => {
-            if (username === bot.username) return
-            console.log(`Chat: ${username}: ${message}`)
-          })
-
-          bot.on('error', (err) => console.log('Error:', err))
-          bot.on('kicked', (reason) => console.log('Kicked for:', reason))
+          const mineflayer = require('mineflayer');
+          const botOptions = {
+              host: 'ahsmpw.falixsrv.me',
+              port: 21987,
+              username: 'afkbot',
+              version: '1.20.1'
+          };
+          const password = 'afkbot';
+          function startBot() {
+              const bot = mineflayer.createBot(botOptions);
+              bot.on('message', (message) => {
+                  const msg = message.toString().toLowerCase();
+                  if (msg.includes('register')) {
+                      bot.chat(`/register ${password} ${password}`);
+                  } else if (msg.includes('login') || msg.includes('log in')) {
+                      bot.chat(`/login ${password}`);
+                  }
+              });
+              setInterval(() => {
+                  if (bot.entity) {
+                      bot.setControlState('jump', true);
+                      setTimeout(() => bot.setControlState('jump', false), 500);
+                  }
+              }, 60000);
+              bot.on('end', () => setTimeout(startBot, 5000));
+          }
+          startBot();
           EOF
 
       - name: Install Mineflayer
         run: npm install mineflayer
 
-      - name: Run Bot for 5h 40m
+      - name: Run Bot
         run: |
-          echo "Bot starting... It will run for 5 hours and 40 minutes."
-          # Start the bot in the background
           node bot.js &
-          # Sleep for 5 hours (18000s) + 40 minutes (2400s) = 20400 seconds
-          sleep 20400
-          echo "Runtime limit reached. Stopping workflow."
+          sleep 20400 # 5 hours and 40 minutes
