@@ -1,10 +1,23 @@
 name: Mineflayer-AFK-Bot
 on: 
   workflow_dispatch:
+    inputs:
+      resume_attempt:
+        description: 'Resume attempt number'
+        required: false
+        default: '1'
+
+env:
+  # TESTING MODE: Changed from 5 hours to 3 minutes
+  TIMEOUT_MINUTES: 3
+  TIMEOUT_SECONDS: 180  # 3 minutes for testing
 
 jobs:
   run-mineflayer:
     runs-on: ubuntu-latest
+    # TESTING MODE: Changed from 310 (5h10m) to 5 minutes (3min + buffer)
+    timeout-minutes: 5
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,6 +28,7 @@ jobs:
         run: |
           cat << 'EOF' > bot.js
           const mineflayer = require('mineflayer');
+          const fs = require('fs');
           const botOptions = {
               host: 'ahsmpw.falixsrv.me',
               port: 21987,
@@ -22,8 +36,15 @@ jobs:
               version: false
           };
           const password = 'afkbot';
+
+          // TESTING MODE: Changed from 5 hours to 3 minutes
+          const startTime = Date.now();
+          const MAX_RUNTIME = 3 * 60 * 1000; // 3 minutes in ms (was: 5 * 60 * 60 * 1000)
+          let shutdownInitiated = false;
+
           function startBot() {
               const bot = mineflayer.createBot(botOptions);
+
               bot.on('message', (message) => {
                   const msg = message.toString().toLowerCase();
                   if (msg.includes('register')) {
@@ -32,21 +53,113 @@ jobs:
                       bot.chat(`/login ${password}`);
                   }
               });
-              setInterval(() => {
-                  if (bot.entity) {
+
+              // Jump every 60 seconds (1 minute) to prevent AFK kick
+              const jumpInterval = setInterval(() => {
+                  if (bot.entity && !shutdownInitiated) {
                       bot.setControlState('jump', true);
                       setTimeout(() => bot.setControlState('jump', false), 500);
                   }
               }, 60000);
-              bot.on('end', () => setTimeout(startBot, 5000));
+
+              // TESTING MODE: Check every 10 seconds instead of 30 for faster response
+              const checkInterval = setInterval(() => {
+                  const elapsed = Date.now() - startTime;
+                  if (elapsed >= MAX_RUNTIME && !shutdownInitiated) {
+                      shutdownInitiated = true;
+                      console.log('\n[TIMEOUT] 3 minutes reached (TESTING MODE). Initiating graceful shutdown...');
+
+                      // Save state file to signal we need restart
+                      fs.writeFileSync('.restart_signal', Date.now().toString());
+
+                      // Clean disconnect
+                      clearInterval(jumpInterval);
+                      clearInterval(checkInterval);
+                      bot.quit('Scheduled restart after 3 minutes (TESTING)');
+
+                      // Exit cleanly after short delay
+                      setTimeout(() => process.exit(0), 2000);
+                  }
+              }, 10000); // TESTING MODE: Check every 10 seconds (was: 30000)
+
+              bot.on('end', () => {
+                  clearInterval(jumpInterval);
+                  clearInterval(checkInterval);
+                  if (!shutdownInitiated) {
+                      console.log('Bot disconnected, reconnecting in 5s...');
+                      setTimeout(startBot, 5000);
+                  }
+              });
+
+              bot.on('error', (err) => {
+                  console.error('Bot error:', err.message);
+              });
           }
+
           startBot();
           EOF
 
       - name: Install Mineflayer
         run: npm install mineflayer
 
-      - name: Run Bot
+      - name: Run Bot with Timeout and Auto-Restart
+        id: run_bot
         run: |
+          #!/bin/bash
+          echo "Starting Mineflayer AFK Bot - Attempt #${{ github.event.inputs.resume_attempt || '1' }}"
+          # TESTING MODE: Will restart every 3 minutes
+          echo "TESTING MODE: Will restart every 3 minutes"
+
+          # Run the bot
           node bot.js &
-          sleep 20400 # 5 hours and 40 minutes
+          BOT_PID=$!
+
+          # Wait for bot to finish (either by timeout or crash)
+          wait $BOT_PID
+          EXIT_CODE=$?
+
+          echo "Bot process exited with code: $EXIT_CODE"
+
+          # Check if restart signal was created (timeout reached)
+          if [ -f ".restart_signal" ]; then
+              echo "\n[RESTART] Timeout signal detected after 3 minutes (TESTING). Triggering next run..."
+              rm -f .restart_signal
+              exit 0  # Clean exit for timeout
+          fi
+
+          exit $EXIT_CODE
+        continue-on-error: true
+
+      - name: Trigger Next Run (Auto-Restart)
+        if: always()  # Run even if previous step failed or succeeded
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const currentAttempt = parseInt('${{ github.event.inputs.resume_attempt }}') || 1;
+            const nextAttempt = currentAttempt + 1;
+
+            console.log(`[TESTING MODE] Triggering next run (attempt #${nextAttempt})...`);
+
+            try {
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'Mineflayer-AFK-Bot.yml',
+                ref: context.ref,
+                inputs: {
+                  resume_attempt: nextAttempt.toString()
+                }
+              });
+              console.log('✅ Next workflow triggered successfully (TESTING: 3min cycles)');
+            } catch (error) {
+              console.error('❌ Failed to trigger next run:', error.message);
+              console.log('Bot will stop. To restart manually, go to Actions tab and run this workflow again.');
+              core.setFailed(error.message);
+            }
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f .restart_signal
+          echo "=== Attempt #${{ github.event.inputs.resume_attempt || '1' }} Complete (TESTING: 3min restart) ==="
