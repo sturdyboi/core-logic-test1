@@ -19,7 +19,7 @@ jobs:
               host: 'pathborn.aternos.me',
               port: 38926,
               username: 'afkbot',
-              version: '1.20.1'
+              version: false
           };
           const password = 'afkbot';
           function startBot() {
