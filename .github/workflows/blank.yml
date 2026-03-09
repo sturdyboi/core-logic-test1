@@ -16,13 +16,13 @@ permissions:
   contents: read
 
 env:
-  RUNTIME_MINUTES: 3
-  OVERLAP_SECONDS: 30  # Trigger new run 30s before current ends
+  RUNTIME_HOURS: 5
+  OVERLAP_MINUTES: 2  # Trigger new run 2 minutes before current ends
 
 jobs:
   run-mineflayer:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 310  # 5 hours + 10 minutes buffer
 
     steps:
       - name: Wait for previous run to finish (if applicable)
@@ -59,7 +59,6 @@ jobs:
           cat << 'EOF' > bot.js
           const mineflayer = require('mineflayer');
           const fs = require('fs');
-          const http = require('http');
           const botOptions = {
               host: 'ahsmpw.falixsrv.me',
               port: 21987,
@@ -69,8 +68,8 @@ jobs:
           const password = 'afkbot';
 
           const startTime = Date.now();
-          const RUNTIME_MS = 3 * 60 * 1000; // 3 minutes
-          const OVERLAP_MS = 30 * 1000; // Trigger next run 30s before end
+          const RUNTIME_MS = 5 * 60 * 60 * 1000; // 5 hours
+          const OVERLAP_MS = 2 * 60 * 1000; // Trigger next run 2 minutes before end
           let shutdownInitiated = false;
           let nextRunTriggered = false;
 
@@ -94,33 +93,33 @@ jobs:
                   }
               }, 60000);
 
-              // Monitor runtime - trigger next run 30s before ending
+              // Monitor runtime - trigger next run 2 minutes before ending
               const checkInterval = setInterval(() => {
                   const elapsed = Date.now() - startTime;
 
-                  // Trigger next run 30 seconds before we quit
+                  // Trigger next run 2 minutes before we quit (at 4 hours 58 minutes)
                   if (elapsed >= (RUNTIME_MS - OVERLAP_MS) && !nextRunTriggered) {
                       nextRunTriggered = true;
-                      console.log('\n[TRIGGER] 2min 30s reached - Starting next workflow early...');
+                      console.log('\n[TRIGGER] 4 hours 58 minutes reached - Starting next workflow early...');
 
                       // Create signal file to trigger next run
                       fs.writeFileSync('.trigger_next_run', process.env.GITHUB_RUN_ID || 'unknown');
                   }
 
-                  // Graceful shutdown at exactly 3 minutes
+                  // Graceful shutdown at exactly 5 hours
                   if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
                       shutdownInitiated = true;
-                      console.log('\n[TIMEOUT] 3 minutes reached. Disconnecting...');
+                      console.log('\n[TIMEOUT] 5 hours reached. Disconnecting...');
 
                       fs.writeFileSync('.shutdown_complete', Date.now().toString());
 
                       clearInterval(jumpInterval);
                       clearInterval(checkInterval);
-                      bot.quit('Scheduled restart');
+                      bot.quit('Scheduled restart after 5 hours');
 
                       setTimeout(() => process.exit(0), 2000);
                   }
-              }, 5000); // Check every 5 seconds
+              }, 30000); // Check every 30 seconds
 
               bot.on('end', () => {
                   clearInterval(jumpInterval);
@@ -148,7 +147,7 @@ jobs:
           echo "=========================================="
           echo "Starting Bot - Attempt #${{ github.event.inputs.resume_attempt || '1' }}"
           echo "Run ID: ${{ github.run_id }}"
-          echo "Will trigger next run at 2min 30s, shutdown at 3min"
+          echo "Will trigger next run at 4h 58min, shutdown at 5 hours"
           echo "=========================================="
 
           # Start bot in background
@@ -156,7 +155,7 @@ jobs:
           node bot.js &
           BOT_PID=$!
 
-          # Monitor for trigger signal (at 2min 30s)
+          # Monitor for trigger signal (at 4h 58min)
           NEXT_TRIGGERED=false
           while kill -0 $BOT_PID 2>/dev/null; do
               if [ -f ".trigger_next_run" ] && [ "$NEXT_TRIGGERED" = "false" ]; then
