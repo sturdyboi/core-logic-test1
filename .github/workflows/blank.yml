@@ -147,24 +147,58 @@ jobs:
           }
 
           function startAntiAfk() {
-              // Jump every 60 seconds
+              let direction = 0; // 0: forward, 1: right, 2: back, 3: left
+
               afkInterval = setInterval(() => {
                   try {
                       if (bot && bot.entity && !shutdownInitiated) {
-                          // Jump
-                          bot.setControlState('jump', true);
+                          // Walk in a small circle pattern
+                          switch(direction) {
+                              case 0: // Walk forward
+                                  bot.setControlState('forward', true);
+                                  bot.setControlState('back', false);
+                                  bot.setControlState('left', false);
+                                  bot.setControlState('right', false);
+                                  break;
+                              case 1: // Walk right
+                                  bot.setControlState('forward', false);
+                                  bot.setControlState('back', false);
+                                  bot.setControlState('left', false);
+                                  bot.setControlState('right', true);
+                                  break;
+                              case 2: // Walk back
+                                  bot.setControlState('forward', false);
+                                  bot.setControlState('back', true);
+                                  bot.setControlState('left', false);
+                                  bot.setControlState('right', false);
+                                  break;
+                              case 3: // Walk left
+                                  bot.setControlState('forward', false);
+                                  bot.setControlState('back', false);
+                                  bot.setControlState('left', true);
+                                  bot.setControlState('right', false);
+                                  break;
+                          }
+
+                          // Rotate to face direction of movement
+                          const currentYaw = bot.entity.yaw;
+                          bot.look(currentYaw - (Math.PI / 2), 0, false);
+
+                          // Move to next direction for next interval
+                          direction = (direction + 1) % 4;
+
+                          // Stop after 2 seconds, then repeat
                           setTimeout(() => {
                               try {
-                                  bot.setControlState('jump', false);
+                                  bot.setControlState('forward', false);
+                                  bot.setControlState('back', false);
+                                  bot.setControlState('left', false);
+                                  bot.setControlState('right', false);
                               } catch (e) {}
-                          }, 500);
-
-                          // Also rotate slightly to prevent rotation-based AFK detection
-                          const currentYaw = bot.entity.yaw;
-                          bot.look(currentYaw + Math.random() * 0.5 - 0.25, 0, false);
+                          }, 2000);
                       }
                   } catch (e) {}
-              }, 60000);
+              }, 30000);
           }
 
           startBot();
@@ -231,20 +265,4 @@ jobs:
           EOF
 
               echo "Payload contents:"
-              cat trigger_payload.json
-
-              curl -X POST                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"                 -H "Accept: application/vnd.github.v3+json"                 -H "Content-Type: application/json"                 -d @trigger_payload.json                 "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches"
-
-              echo ""
-              echo "✅ Triggered attempt #$NEXT_ATTEMPT (will wait for run $CURRENT_RUN_ID to finish)"
-          else
-              echo "No trigger signal found - not triggering next run"
-          fi
-        continue-on-error: true
-
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -f .trigger_next_run .shutdown_complete .next_run_should_wait_for trigger_payload.json
-          echo "\n=== Attempt #${{ github.event.inputs.resume_attempt || '1' }} Finished ==="
-          echo "Next run should have been triggered and is waiting for this one to complete"
+            <response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
