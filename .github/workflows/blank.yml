@@ -6,19 +6,49 @@ on:
         description: 'Resume attempt number'
         required: false
         default: '1'
+      previous_run_id:
+        description: 'Previous run ID to wait for'
+        required: false
+        default: ''
+
+permissions:
+  actions: write
+  contents: read
 
 env:
-  # TESTING MODE: Changed from 5 hours to 3 minutes
-  TIMEOUT_MINUTES: 3
-  TIMEOUT_SECONDS: 180  # 3 minutes for testing
+  RUNTIME_MINUTES: 3
+  OVERLAP_SECONDS: 30  # Trigger new run 30s before current ends
 
 jobs:
   run-mineflayer:
     runs-on: ubuntu-latest
-    # TESTING MODE: Changed from 310 (5h10m) to 5 minutes (3min + buffer)
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
+      - name: Wait for previous run to finish (if applicable)
+        if: github.event.inputs.previous_run_id != ''
+        run: |
+          PREV_ID="${{ github.event.inputs.previous_run_id }}"
+          echo "Waiting for previous run (ID: $PREV_ID) to complete..."
+
+          # Poll GitHub API until previous run is completed
+          while true; do
+            STATUS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"               -H "Accept: application/vnd.github.v3+json"               "https://api.github.com/repos/${{ github.repository }}/actions/runs/$PREV_ID"               | jq -r '.status')
+
+            echo "Previous run status: $STATUS"
+
+            if [ "$STATUS" = "completed" ]; then
+              echo "✅ Previous run finished. Starting bot now..."
+              break
+            elif [ "$STATUS" = "null" ] || [ -z "$STATUS" ]; then
+              echo "⚠️ Could not get status, assuming previous run finished"
+              break
+            fi
+
+            echo "⏳ Still waiting... checking again in 5 seconds"
+            sleep 5
+          done
+
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -29,6 +59,7 @@ jobs:
           cat << 'EOF' > bot.js
           const mineflayer = require('mineflayer');
           const fs = require('fs');
+          const http = require('http');
           const botOptions = {
               host: 'ahsmpw.falixsrv.me',
               port: 21987,
@@ -37,10 +68,11 @@ jobs:
           };
           const password = 'afkbot';
 
-          // TESTING MODE: Changed from 5 hours to 3 minutes
           const startTime = Date.now();
-          const MAX_RUNTIME = 3 * 60 * 1000; // 3 minutes in ms (was: 5 * 60 * 60 * 1000)
+          const RUNTIME_MS = 3 * 60 * 1000; // 3 minutes
+          const OVERLAP_MS = 30 * 1000; // Trigger next run 30s before end
           let shutdownInitiated = false;
+          let nextRunTriggered = false;
 
           function startBot() {
               const bot = mineflayer.createBot(botOptions);
@@ -54,7 +86,7 @@ jobs:
                   }
               });
 
-              // Jump every 60 seconds (1 minute) to prevent AFK kick
+              // Jump every 60 seconds to prevent AFK kick
               const jumpInterval = setInterval(() => {
                   if (bot.entity && !shutdownInitiated) {
                       bot.setControlState('jump', true);
@@ -62,31 +94,39 @@ jobs:
                   }
               }, 60000);
 
-              // TESTING MODE: Check every 10 seconds instead of 30 for faster response
+              // Monitor runtime - trigger next run 30s before ending
               const checkInterval = setInterval(() => {
                   const elapsed = Date.now() - startTime;
-                  if (elapsed >= MAX_RUNTIME && !shutdownInitiated) {
+
+                  // Trigger next run 30 seconds before we quit
+                  if (elapsed >= (RUNTIME_MS - OVERLAP_MS) && !nextRunTriggered) {
+                      nextRunTriggered = true;
+                      console.log('\n[TRIGGER] 2min 30s reached - Starting next workflow early...');
+
+                      // Create signal file to trigger next run
+                      fs.writeFileSync('.trigger_next_run', process.env.GITHUB_RUN_ID || 'unknown');
+                  }
+
+                  // Graceful shutdown at exactly 3 minutes
+                  if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
                       shutdownInitiated = true;
-                      console.log('\n[TIMEOUT] 3 minutes reached (TESTING MODE). Initiating graceful shutdown...');
+                      console.log('\n[TIMEOUT] 3 minutes reached. Disconnecting...');
 
-                      // Save state file to signal we need restart
-                      fs.writeFileSync('.restart_signal', Date.now().toString());
+                      fs.writeFileSync('.shutdown_complete', Date.now().toString());
 
-                      // Clean disconnect
                       clearInterval(jumpInterval);
                       clearInterval(checkInterval);
-                      bot.quit('Scheduled restart after 3 minutes (TESTING)');
+                      bot.quit('Scheduled restart');
 
-                      // Exit cleanly after short delay
                       setTimeout(() => process.exit(0), 2000);
                   }
-              }, 10000); // TESTING MODE: Check every 10 seconds (was: 30000)
+              }, 5000); // Check every 5 seconds
 
               bot.on('end', () => {
                   clearInterval(jumpInterval);
                   clearInterval(checkInterval);
                   if (!shutdownInitiated) {
-                      console.log('Bot disconnected, reconnecting in 5s...');
+                      console.log('Bot disconnected unexpectedly, reconnecting in 5s...');
                       setTimeout(startBot, 5000);
                   }
               });
@@ -102,64 +142,76 @@ jobs:
       - name: Install Mineflayer
         run: npm install mineflayer
 
-      - name: Run Bot with Timeout and Auto-Restart
-        id: run_bot
+      - name: Start Bot and Monitor
+        id: bot_run
         run: |
-          #!/bin/bash
-          echo "Starting Mineflayer AFK Bot - Attempt #${{ github.event.inputs.resume_attempt || '1' }}"
-          # TESTING MODE: Will restart every 3 minutes
-          echo "TESTING MODE: Will restart every 3 minutes"
+          echo "=========================================="
+          echo "Starting Bot - Attempt #${{ github.event.inputs.resume_attempt || '1' }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Will trigger next run at 2min 30s, shutdown at 3min"
+          echo "=========================================="
 
-          # Run the bot
+          # Start bot in background
+          export GITHUB_RUN_ID="${{ github.run_id }}"
           node bot.js &
           BOT_PID=$!
 
-          # Wait for bot to finish (either by timeout or crash)
+          # Monitor for trigger signal (at 2min 30s)
+          NEXT_TRIGGERED=false
+          while kill -0 $BOT_PID 2>/dev/null; do
+              if [ -f ".trigger_next_run" ] && [ "$NEXT_TRIGGERED" = "false" ]; then
+                  NEXT_TRIGGERED=true
+                  echo "\n[MONITOR] Trigger signal detected! Will trigger next run now..."
+
+                  # Save the run ID for next run to wait for
+                  echo "${{ github.run_id }}" > .next_run_should_wait_for
+              fi
+              sleep 1
+          done
+
           wait $BOT_PID
           EXIT_CODE=$?
 
-          echo "Bot process exited with code: $EXIT_CODE"
+          echo "Bot exited with code: $EXIT_CODE"
 
-          # Check if restart signal was created (timeout reached)
-          if [ -f ".restart_signal" ]; then
-              echo "\n[RESTART] Timeout signal detected after 3 minutes (TESTING). Triggering next run..."
-              rm -f .restart_signal
-              exit 0  # Clean exit for timeout
+          if [ -f ".shutdown_complete" ]; then
+              echo "✅ Clean shutdown detected"
+              exit 0
           fi
 
           exit $EXIT_CODE
         continue-on-error: true
 
-      - name: Trigger Next Run (Auto-Restart)
-        if: always()  # Run even if previous step failed or succeeded
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const currentAttempt = parseInt('${{ github.event.inputs.resume_attempt }}') || 1;
-            const nextAttempt = currentAttempt + 1;
+      - name: Trigger Next Run (with overlap)
+        if: always()
+        id: trigger_next
+        run: |
+          # Check if we should trigger next run
+          if [ -f ".trigger_next_run" ] || [ -f ".next_run_should_wait_for" ]; then
+              echo "Triggering next workflow run..."
 
-            console.log(`[TESTING MODE] Triggering next run (attempt #${nextAttempt})...`);
+              CURRENT_ATTEMPT="${{ github.event.inputs.resume_attempt || '1' }}"
+              NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
+              CURRENT_RUN_ID="${{ github.run_id }}"
 
-            try {
-              await github.rest.actions.createWorkflowDispatch({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: 'Mineflayer-AFK-Bot.yml',
-                ref: context.ref,
-                inputs: {
-                  resume_attempt: nextAttempt.toString()
-                }
-              });
-              console.log('✅ Next workflow triggered successfully (TESTING: 3min cycles)');
-            } catch (error) {
-              console.error('❌ Failed to trigger next run:', error.message);
-              console.log('Bot will stop. To restart manually, go to Actions tab and run this workflow again.');
-              core.setFailed(error.message);
-            }
+              # Use GitHub API to trigger workflow_dispatch
+              curl -X POST                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"                 -H "Accept: application/vnd.github.v3+json"                 -H "Content-Type: application/json"                 -d "{
+                  "ref": "${{ github.ref }}",
+                  "inputs": {
+                    "resume_attempt": "$NEXT_ATTEMPT",
+                    "previous_run_id": "$CURRENT_RUN_ID"
+                  }
+                }"                 "https://api.github.com/repos/${{ github.repository }}/actions/workflows/Mineflayer-AFK-Bot.yml/dispatches"
+
+              echo "✅ Triggered attempt #$NEXT_ATTEMPT (will wait for run $CURRENT_RUN_ID to finish)"
+          else
+              echo "No trigger signal found - not triggering next run"
+          fi
+        continue-on-error: true
 
       - name: Cleanup
         if: always()
         run: |
-          rm -f .restart_signal
-          echo "=== Attempt #${{ github.event.inputs.resume_attempt || '1' }} Complete (TESTING: 3min restart) ==="
+          rm -f .trigger_next_run .shutdown_complete .next_run_should_wait_for
+          echo "\n=== Attempt #${{ github.event.inputs.resume_attempt || '1' }} Finished ==="
+          echo "Next run should have been triggered and is waiting for this one to complete"
