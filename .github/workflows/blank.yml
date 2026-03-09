@@ -76,6 +76,8 @@ jobs:
           let wasKicked = false;
           let bot = null;
           let afkInterval = null;
+          let hasSpawned = false;
+          let hasLoggedKick = false;
 
           function startBot() {
               if (shutdownInitiated) return;
@@ -93,13 +95,14 @@ jobs:
                   } catch (e) {}
               });
 
-              // Start anti-AFK only after bot spawns
               bot.once('spawn', () => {
-                  console.log('[SPAWN] Bot spawned, starting anti-AFK');
-                  startAntiAfk();
+                  if (!hasSpawned) {
+                      console.log('[SPAWN] Bot spawned, starting anti-AFK');
+                      hasSpawned = true;
+                      startAntiAfk();
+                  }
               });
 
-              // Check runtime every 30 seconds
               const checkInterval = setInterval(() => {
                   const elapsed = Date.now() - startTime;
 
@@ -121,7 +124,10 @@ jobs:
               }, 30000);
 
               bot.on('kicked', (reason) => {
-                  console.log(`[KICKED] ${reason} - Will reconnect in 30s`);
+                  if (!hasLoggedKick) {
+                      console.log(`[KICKED] ${reason}`);
+                      hasLoggedKick = true;
+                  }
                   wasKicked = true;
                   if (afkInterval) clearInterval(afkInterval);
 
@@ -130,14 +136,13 @@ jobs:
                           wasKicked = false;
                           startBot();
                       }
-                  }, 30000);
+                  }, 60000);
               });
 
               bot.on('end', () => {
                   if (afkInterval) clearInterval(afkInterval);
 
                   if (wasKicked && !shutdownInitiated) {
-                      console.log('[RECONNECT] Reconnecting after kick...');
                       wasKicked = false;
                       startBot();
                   }
@@ -147,32 +152,43 @@ jobs:
           }
 
           function startAntiAfk() {
-              let direction = 0; // 0: forward, 1: right, 2: back, 3: left
+              let tickCount = 0;
+              let circleDirection = 0;
 
               afkInterval = setInterval(() => {
                   try {
-                      if (bot && bot.entity && !shutdownInitiated) {
-                          // Walk in a small circle pattern
-                          switch(direction) {
-                              case 0: // Walk forward
+                      if (!bot || !bot.entity || shutdownInitiated) return;
+
+                      tickCount++;
+
+                      // Every 30 seconds: Jump
+                      bot.setControlState('jump', true);
+                      setTimeout(() => {
+                          try { bot.setControlState('jump', false); } catch (e) {}
+                      }, 500);
+
+                      // Every 60 seconds: Walk in circle
+                      if (tickCount % 2 === 0) {
+                          switch(circleDirection) {
+                              case 0:
                                   bot.setControlState('forward', true);
                                   bot.setControlState('back', false);
                                   bot.setControlState('left', false);
                                   bot.setControlState('right', false);
                                   break;
-                              case 1: // Walk right
+                              case 1:
                                   bot.setControlState('forward', false);
                                   bot.setControlState('back', false);
                                   bot.setControlState('left', false);
                                   bot.setControlState('right', true);
                                   break;
-                              case 2: // Walk back
+                              case 2:
                                   bot.setControlState('forward', false);
                                   bot.setControlState('back', true);
                                   bot.setControlState('left', false);
                                   bot.setControlState('right', false);
                                   break;
-                              case 3: // Walk left
+                              case 3:
                                   bot.setControlState('forward', false);
                                   bot.setControlState('back', false);
                                   bot.setControlState('left', true);
@@ -180,14 +196,10 @@ jobs:
                                   break;
                           }
 
-                          // Rotate to face direction of movement
                           const currentYaw = bot.entity.yaw;
                           bot.look(currentYaw - (Math.PI / 2), 0, false);
+                          circleDirection = (circleDirection + 1) % 4;
 
-                          // Move to next direction for next interval
-                          direction = (direction + 1) % 4;
-
-                          // Stop after 2 seconds, then repeat
                           setTimeout(() => {
                               try {
                                   bot.setControlState('forward', false);
@@ -197,6 +209,12 @@ jobs:
                               } catch (e) {}
                           }, 2000);
                       }
+
+                      // Every 90 seconds: Swing arm (click)
+                      if (tickCount % 3 === 0) {
+                          bot.swingArm();
+                      }
+
                   } catch (e) {}
               }, 30000);
           }
@@ -251,18 +269,4 @@ jobs:
               echo "Triggering next workflow run..."
 
               CURRENT_ATTEMPT="${{ github.event.inputs.resume_attempt || '1' }}"
-              NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
-              CURRENT_RUN_ID="${{ github.run_id }}"
-
-              cat > trigger_payload.json << EOF
-          {
-            "ref": "${{ github.ref }}",
-            "inputs": {
-              "resume_attempt": "$NEXT_ATTEMPT",
-              "previous_run_id": "$CURRENT_RUN_ID"
-            }
-          }
-          EOF
-
-              echo "Payload contents:"
-            <response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
+              NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1)<response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
