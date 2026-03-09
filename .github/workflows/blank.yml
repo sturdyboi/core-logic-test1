@@ -194,15 +194,24 @@ jobs:
               NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
               CURRENT_RUN_ID="${{ github.run_id }}"
 
-              # Use GitHub API to trigger workflow_dispatch
-              curl -X POST                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"                 -H "Accept: application/vnd.github.v3+json"                 -H "Content-Type: application/json"                 -d "{
-                  "ref": "${{ github.ref }}",
-                  "inputs": {
-                    "resume_attempt": "$NEXT_ATTEMPT",
-                    "previous_run_id": "$CURRENT_RUN_ID"
-                  }
-                }"                 "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches"
+              # Create JSON payload file to avoid escaping issues
+              cat > trigger_payload.json << EOF
+          {
+            "ref": "${{ github.ref }}",
+            "inputs": {
+              "resume_attempt": "$NEXT_ATTEMPT",
+              "previous_run_id": "$CURRENT_RUN_ID"
+            }
+          }
+          EOF
 
+              echo "Payload contents:"
+              cat trigger_payload.json
+
+              # Use GitHub API to trigger workflow_dispatch
+              curl -X POST                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"                 -H "Accept: application/vnd.github.v3+json"                 -H "Content-Type: application/json"                 -d @trigger_payload.json                 "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches"
+
+              echo ""
               echo "✅ Triggered attempt #$NEXT_ATTEMPT (will wait for run $CURRENT_RUN_ID to finish)"
           else
               echo "No trigger signal found - not triggering next run"
@@ -212,6 +221,6 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          rm -f .trigger_next_run .shutdown_complete .next_run_should_wait_for
+          rm -f .trigger_next_run .shutdown_complete .next_run_should_wait_for trigger_payload.json
           echo "\n=== Attempt #${{ github.event.inputs.resume_attempt || '1' }} Finished ==="
           echo "Next run should have been triggered and is waiting for this one to complete"
