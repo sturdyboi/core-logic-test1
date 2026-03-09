@@ -75,6 +75,7 @@ jobs:
           let nextRunTriggered = false;
           let wasKicked = false;
           let bot = null;
+          let afkInterval = null;
 
           function startBot() {
               if (shutdownInitiated) return;
@@ -92,15 +93,13 @@ jobs:
                   } catch (e) {}
               });
 
-              const jumpInterval = setInterval(() => {
-                  try {
-                      if (bot.entity && !shutdownInitiated) {
-                          bot.setControlState('jump', true);
-                          setTimeout(() => bot.setControlState('jump', false), 500);
-                      }
-                  } catch (e) {}
-              }, 60000);
+              // Start anti-AFK only after bot spawns
+              bot.once('spawn', () => {
+                  console.log('[SPAWN] Bot spawned, starting anti-AFK');
+                  startAntiAfk();
+              });
 
+              // Check runtime every 30 seconds
               const checkInterval = setInterval(() => {
                   const elapsed = Date.now() - startTime;
 
@@ -114,8 +113,8 @@ jobs:
                       shutdownInitiated = true;
                       console.log('[TIMEOUT] 5 hours - Disconnecting');
                       fs.writeFileSync('.shutdown_complete', Date.now().toString());
-                      clearInterval(jumpInterval);
                       clearInterval(checkInterval);
+                      if (afkInterval) clearInterval(afkInterval);
                       try { bot.quit('Scheduled restart'); } catch (e) {}
                       setTimeout(() => process.exit(0), 2000);
                   }
@@ -124,8 +123,7 @@ jobs:
               bot.on('kicked', (reason) => {
                   console.log(`[KICKED] ${reason} - Will reconnect in 30s`);
                   wasKicked = true;
-                  clearInterval(jumpInterval);
-                  clearInterval(checkInterval);
+                  if (afkInterval) clearInterval(afkInterval);
 
                   setTimeout(() => {
                       if (!shutdownInitiated) {
@@ -136,8 +134,7 @@ jobs:
               });
 
               bot.on('end', () => {
-                  clearInterval(jumpInterval);
-                  clearInterval(checkInterval);
+                  if (afkInterval) clearInterval(afkInterval);
 
                   if (wasKicked && !shutdownInitiated) {
                       console.log('[RECONNECT] Reconnecting after kick...');
@@ -147,6 +144,27 @@ jobs:
               });
 
               bot.on('error', () => {});
+          }
+
+          function startAntiAfk() {
+              // Jump every 60 seconds
+              afkInterval = setInterval(() => {
+                  try {
+                      if (bot && bot.entity && !shutdownInitiated) {
+                          // Jump
+                          bot.setControlState('jump', true);
+                          setTimeout(() => {
+                              try {
+                                  bot.setControlState('jump', false);
+                              } catch (e) {}
+                          }, 500);
+
+                          // Also rotate slightly to prevent rotation-based AFK detection
+                          const currentYaw = bot.entity.yaw;
+                          bot.look(currentYaw + Math.random() * 0.5 - 0.25, 0, false);
+                      }
+                  } catch (e) {}
+              }, 60000);
           }
 
           startBot();
