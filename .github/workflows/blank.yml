@@ -55,11 +55,10 @@ jobs:
 
       - name: Create Bot Script
         run: |
-          cat << 'EOF' > bot.js
+          cat > bot.js << 'ENDOFFILE'
           const mineflayer = require('mineflayer');
           const fs = require('fs');
 
-          // Prevent chat parsing crashes
           process.on('uncaughtException', (err) => {
               if (err.message && err.message.includes('unknown chat format code')) {
                   console.log('[CHAT ERROR] Ignored malformed chat message');
@@ -101,7 +100,6 @@ jobs:
                   return;
               }
 
-              // Safe message handler
               bot.on('message', (message) => {
                   try {
                       let msg = '';
@@ -113,14 +111,11 @@ jobs:
                           return;
                       }
 
-                      // Check for FalixNodes verification message
                       if (msg.includes('are you still there') && msg.includes('verify') && msg.includes('falixnodes')) {
                           console.log('[FALIX] Verification message detected! Will reconnect in 25min to cancel timer');
 
-                          // Clear any existing timer
                           if (falixTimer) clearTimeout(falixTimer);
 
-                          // Set timer to reconnect after 25 minutes (5 min before deadline)
                           falixTimer = setTimeout(() => {
                               if (!shutdownInitiated && bot) {
                                   console.log('[FALIX] Reconnecting to cancel shutdown timer...');
@@ -129,13 +124,12 @@ jobs:
                                       bot.quit('FalixNodes AFK reset');
                                   } catch (e) {}
 
-                                  // Wait 5 seconds then reconnect
                                   setTimeout(() => {
                                       isReconnectingForFalix = false;
                                       startBot();
                                   }, 5000);
                               }
-                          }, 25 * 60 * 1000); // 25 minutes
+                          }, 25 * 60 * 1000);
                       }
 
                       if (msg.includes('register')) {
@@ -176,7 +170,6 @@ jobs:
               }, 30000);
 
               bot.on('kicked', (reason) => {
-                  // Don't log if it's a Falix reconnect
                   if (isReconnectingForFalix) return;
 
                   if (!hasLoggedKick) {
@@ -198,7 +191,6 @@ jobs:
               bot.on('end', () => {
                   if (afkInterval) clearInterval(afkInterval);
 
-                  // Don't reconnect on Falix reconnect (already handled)
                   if (isReconnectingForFalix) return;
 
                   if (wasKicked && !shutdownInitiated) {
@@ -220,13 +212,11 @@ jobs:
 
                       tickCount++;
 
-                      // Every 30 seconds: Jump
                       bot.setControlState('jump', true);
                       setTimeout(() => {
                           try { bot.setControlState('jump', false); } catch (e) {}
                       }, 500);
 
-                      // Every 60 seconds: Walk in circle
                       if (tickCount % 2 === 0) {
                           switch(circleDirection) {
                               case 0:
@@ -250,4 +240,17 @@ jobs:
                               case 3:
                                   bot.setControlState('forward', false);
                                   bot.setControlState('back', false);
-                                  bot.setControlState('le<response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
+                                  bot.setControlState('left', true);
+                                  bot.setControlState('right', false);
+                                  break;
+                          }
+
+                          const currentYaw = bot.entity.yaw;
+                          bot.look(currentYaw - (Math.PI / 2), 0, false);
+                          circleDirection = (circleDirection + 1) % 4;
+
+                          setTimeout(() => {
+                              try {
+                                  bot.setControlState('forward', false);
+                                  bot.setControlState('back', false);
+                      <response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
