@@ -1,4 +1,59 @@
-- name: Create Bot Script
+name: Mineflayer-AFK-Bot
+on: 
+  workflow_dispatch:
+    inputs:
+      resume_attempt:
+        description: 'Resume attempt number'
+        required: false
+        default: '1'
+      previous_run_id:
+        description: 'Previous run ID to wait for'
+        required: false
+        default: ''
+
+permissions:
+  actions: write
+  contents: read
+
+env:
+  RUNTIME_HOURS: 5
+  OVERLAP_MINUTES: 2
+
+jobs:
+  run-mineflayer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 310
+
+    steps:
+      - name: Wait for previous run to finish (if applicable)
+        if: github.event.inputs.previous_run_id != ''
+        run: |
+          PREV_ID="${{ github.event.inputs.previous_run_id }}"
+          echo "Waiting for previous run (ID: $PREV_ID) to complete..."
+
+          while true; do
+            STATUS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"               -H "Accept: application/vnd.github.v3+json"               "https://api.github.com/repos/${{ github.repository }}/actions/runs/$PREV_ID"               | jq -r '.status')
+
+            echo "Previous run status: $STATUS"
+
+            if [ "$STATUS" = "completed" ]; then
+              echo "✅ Previous run finished. Starting bot now..."
+              break
+            elif [ "$STATUS" = "null" ] || [ -z "$STATUS" ]; then
+              echo "⚠️ Could not get status, assuming previous run finished"
+              break
+            fi
+
+            echo "⏳ Still waiting... checking again in 5 seconds"
+            sleep 5
+          done
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Create Bot Script
         run: |
           cat > bot.js << 'BOTSCRIPT'
           const mineflayer = require('mineflayer');
@@ -198,19 +253,4 @@
                               try {
                                   bot.setControlState('forward', false);
                                   bot.setControlState('back', false);
-                                  bot.setControlState('left', false);
-                                  bot.setControlState('right', false);
-                              } catch (e) {}
-                          }, 2000);
-                      }
-
-                      if (tickCount % 3 === 0) {
-                          bot.swingArm();
-                      }
-
-                  } catch (e) {}
-              }, 30000);
-          }
-
-          startBot();
-          BOTSCRIPT
+                      <response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
