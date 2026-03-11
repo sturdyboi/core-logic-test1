@@ -57,94 +57,183 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Mineflayer
-        run: npm install mineflayer
-
-      - name: Start Bots and Monitor
-        id: bot_run
+      - name: Create Bot Script
         run: |
-          echo "=========================================="
-          echo "Starting Bots - Attempt #${{ github.event.inputs.resume_attempt || '1' }}"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Bot Count: ${{ github.event.inputs.bot_count || '1' }}"
-          echo "Will trigger next run at 4h 58min, shutdown at 5 hours"
-          echo "=========================================="
+          cat > bot.js << 'BOTFILEEND'
+          const mineflayer = require("mineflayer");
+          const fs = require("fs");
 
-          export GITHUB_RUN_ID="${{ github.run_id }}"
-          BOT_COUNT="${{ github.event.inputs.bot_count || '1' }}"
+          function generateRandomName() {
+              const adjectives = ['Cool', 'Fast', 'Smart', 'Happy', 'Lucky', 'Wild', 'Crazy', 'Epic', 'Pro', 'Super'];
+              const nouns = ['Bot', 'Player', 'Gamer', 'Hero', 'Star', 'King', 'Queen', 'Ninja', 'Master', 'Legend'];
+              const numbers = Math.floor(Math.random() * 9999);
+              const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+              const noun = nouns[Math.floor(Math.random() * nouns.length)];
+              return `${adj}${noun}${numbers}`;
+          }
 
-          # Validate bot count
-          if [ "$BOT_COUNT" -lt 1 ] || [ "$BOT_COUNT" -gt 10 ]; then
-              echo "⚠️ Invalid bot count: $BOT_COUNT. Using 1."
-              BOT_COUNT=1
-          fi
+          const botIndex = parseInt(process.env.BOT_INDEX || "0");
+          const botUsername = generateRandomName();
 
-          echo "Starting $BOT_COUNT bot(s)..."
+          console.log(`[${botUsername}] Starting bot ${botIndex + 1}`);
 
-          # Start multiple bots with different indices
-          for i in $(seq 0 $(($BOT_COUNT - 1))); do
-              echo "Starting bot $((i + 1)) of $BOT_COUNT (index: $i)..."
-              BOT_INDEX=$i node bot.js &
-              sleep 2  # Small delay between bot starts to avoid connection throttle
-          done
+          process.on("uncaughtException", (err) => {
+              if (err.message && err.message.includes("unknown chat format code")) {
+                  console.log(`[${botUsername}] [CHAT ERROR] Ignored malformed chat message`);
+                  return;
+              }
+              console.error(`[${botUsername}] Uncaught:`, err.message);
+          });
 
-          # Monitor for trigger signal
-          NEXT_TRIGGERED=false
-          while true; do
-              if [ -f ".trigger_next_run" ] && [ "$NEXT_TRIGGERED" = "false" ]; then
-                  NEXT_TRIGGERED=true
-                  echo "\n[MONITOR] Trigger signal detected! Will trigger next run now..."
-                  echo "${{ github.run_id }}" > .next_run_should_wait_for
-              fi
+          const botOptions = {
+              host: "ahsmpw.falixsrv.me",
+              port: 21987,
+              username: botUsername,
+              version: false,
+              hideErrors: true,
+              checkTimeoutInterval: 60000
+          };
 
-              # Check if any node processes are still running
-              if ! pgrep -f "node bot.js" > /dev/null; then
-                  echo "All bots have stopped."
-                  break
-              fi
+          const password = Math.random().toString(36).substring(2, 10);
 
-              sleep 1
-          done
+          const startTime = Date.now();
+          const RUNTIME_MS = 5 * 60 * 60 * 1000;
+          const OVERLAP_MS = 2 * 60 * 1000;
+          let shutdownInitiated = false;
+          let nextRunTriggered = false;
+          let wasKicked = false;
+          let bot = null;
+          let afkInterval = null;
+          let hasSpawned = false;
+          let hasLoggedKick = false;
+          let falixTimer = null;
+          let isReconnectingForFalix = false;
+          let isRegistered = false;
+          let isLoggedIn = false;
 
-          echo "Bot processes finished."
+          function startBot() {
+              if (shutdownInitiated) return;
+              try {
+                  bot = mineflayer.createBot(botOptions);
+              } catch (e) {
+                  setTimeout(startBot, 60000);
+                  return;
+              }
 
-          if [ -f ".shutdown_complete" ]; then
-              echo "✅ Clean shutdown detected"
-              exit 0
-          fi
+              bot.on("message", (message) => {
+                  try {
+                      let msg = "";
+                      if (typeof message === "string") {
+                          msg = message.toLowerCase();
+                      } else if (message && message.toString) {
+                          msg = message.toString().toLowerCase();
+                      } else {
+                          return;
+                      }
 
-          exit 0
-        continue-on-error: true
+                      if (msg.includes("are you still there") && msg.includes("verify") && msg.includes("falixnodes")) {
+                          console.log(`[${botUsername}] [FALIX] Verification message detected! Will reconnect in 25min to cancel timer`);
+                          if (falixTimer) clearTimeout(falixTimer);
+                          falixTimer = setTimeout(() => {
+                              if (!shutdownInitiated && bot) {
+                                  console.log(`[${botUsername}] [FALIX] Reconnecting to cancel shutdown timer...`);
+                                  isReconnectingForFalix = true;
+                                  try { bot.quit("FalixNodes AFK reset"); } catch (e) {}
+                                  setTimeout(() => {
+                                      isReconnectingForFalix = false;
+                                      startBot();
+                                  }, 5000);
+                              }
+                          }, 25 * 60 * 1000);
+                      }
 
-      - name: Trigger Next Run (with overlap)
-        if: always()
-        id: trigger_next
-        run: |
-          if [ -f ".trigger_next_run" ] || [ -f ".next_run_should_wait_for" ]; then
-              echo "Triggering next workflow run..."
+                      if (msg.includes("register") && msg.includes("/register") && !isRegistered) {
+                          console.log(`[${botUsername}] Registering...`);
+                          bot.chat(`/register ${password} ${password}`);
+                          isRegistered = true;
+                      } else if ((msg.includes("login") || msg.includes("log in")) && msg.includes("/login") && !isLoggedIn) {
+                          console.log(`[${botUsername}] Logging in...`);
+                          bot.chat(`/login ${password}`);
+                          isLoggedIn = true;
+                      } else if (msg.includes("successfully registered") || msg.includes("registration successful")) {
+                          console.log(`[${botUsername}] Registration successful!`);
+                          isRegistered = true;
+                          isLoggedIn = true;
+                      } else if (msg.includes("successfully logged in") || msg.includes("login successful")) {
+                          console.log(`[${botUsername}] Login successful!`);
+                          isLoggedIn = true;
+                      }
+                  } catch (e) {}
+              });
 
-              CURRENT_ATTEMPT="${{ github.event.inputs.resume_attempt || '1' }}"
-              NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
-              CURRENT_RUN_ID="${{ github.run_id }}"
-              BOT_COUNT="${{ github.event.inputs.bot_count || '1' }}"
+              bot.once("spawn", () => {
+                  if (!hasSpawned) {
+                      console.log(`[${botUsername}] [SPAWN] Bot spawned, starting anti-AFK`);
+                      hasSpawned = true;
+                      startAntiAfk();
+                  }
+              });
 
-              printf '{"ref":"%s","inputs":{"resume_attempt":"%s","previous_run_id":"%s","bot_count":"%s"}}'                 "${{ github.ref }}" "$NEXT_ATTEMPT" "$CURRENT_RUN_ID" "$BOT_COUNT" > trigger_payload.json
+              const checkInterval = setInterval(() => {
+                  const elapsed = Date.now() - startTime;
+                  if (elapsed >= (RUNTIME_MS - OVERLAP_MS) && !nextRunTriggered) {
+                      nextRunTriggered = true;
+                      console.log(`[${botUsername}] [TRIGGER] 4h 58m - Starting next workflow`);
+                      fs.writeFileSync(".trigger_next_run", process.env.GITHUB_RUN_ID || "unknown");
+                  }
+                  if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
+                      shutdownInitiated = true;
+                      console.log(`[${botUsername}] [TIMEOUT] 5 hours - Disconnecting`);
+                      if (falixTimer) clearTimeout(falixTimer);
+                      fs.writeFileSync(".shutdown_complete", Date.now().toString());
+                      clearInterval(checkInterval);
+                      if (afkInterval) clearInterval(afkInterval);
+                      try { bot.quit("Scheduled restart"); } catch (e) {}
+                      setTimeout(() => process.exit(0), 2002);
+                  }
+              }, 30000);
 
-              echo "Payload contents:"
-              cat trigger_payload.json
+              bot.on("kicked", (reason) => {
+                  if (isReconnectingForFalix) return;
+                  if (!hasLoggedKick) {
+                      const reasonStr = typeof reason === "string" ? reason : JSON.stringify(reason);
+                      console.log(`[${botUsername}] [KICKED] ${reasonStr}`);
+                      hasLoggedKick = true;
+                  }
+                  wasKicked = true;
+                  if (afkInterval) clearInterval(afkInterval);
+                  setTimeout(() => {
+                      if (!shutdownInitiated) {
+                          wasKicked = false;
+                          startBot();
+                      }
+                  }, 60000);
+              });
 
-              curl -X POST                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"                 -H "Accept: application/vnd.github.v3+json"                 -H "Content-Type: application/json"                 -d @trigger_payload.json                 "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches"
+              bot.on("end", () => {
+                  if (afkInterval) clearInterval(afkInterval);
+                  if (isReconnectingForFalix) return;
+                  if (wasKicked && !shutdownInitiated) {
+                      wasKicked = false;
+                      setTimeout(startBot, 60000);
+                  }
+              });
 
-              echo ""
-              echo "✅ Triggered attempt #$NEXT_ATTEMPT (will wait for run $CURRENT_RUN_ID to finish)"
-          else
-              echo "No trigger signal found - not triggering next run"
-          fi
-        continue-on-error: true
+              bot.on("error", () => {});
+          }
 
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -f .trigger_next_run .shutdown_complete .next_run_should_wait_for trigger_payload.json
-          echo "\n=== Attempt #${{ github.event.inputs.resume_attempt || '1' }} Finished ==="
-          echo "Next run should have been triggered and is waiting for this one to complete"
+          function startAntiAfk() {
+              let tickCount = 0;
+              let circleDirection = 0;
+              afkInterval = setInterval(() => {
+                  try {
+                      if (!bot || !bot.entity || shutdownInitiated) return;
+                      tickCount++;
+                      bot.setControlState("jump", true);
+                      setTimeout(() => {
+                          try { bot.setControlState("jump", false); } catch (e) {}
+                      }, 500);
+                      if (tickCount % 2 === 0) {
+                          switch(circleDirection) {
+                              case 0:
+    <response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
