@@ -57,8 +57,8 @@ jobs:
           };
           const password = 'afkbot';
           const startTime = Date.now();
-          const RUNTIME_MS = 5.8 * 60 * 60 * 1000; // 5 hours 50 mins
-          const TRIGGER_MS = 5.7 * 60 * 60 * 1000; // Trigger next run at 5 hours 42 mins
+          const RUNTIME_MS = 5.83 * 60 * 60 * 1000; // ~5 hours 50 mins
+          const TRIGGER_MS = 5.7 * 60 * 60 * 1000;  // Trigger next run at ~5 hours 42 mins
           
           let shutdownInitiated = false;
           let nextRunTriggered = false;
@@ -67,14 +67,15 @@ jobs:
           function startBot() {
               bot = mineflayer.createBot(botOptions);
               
+              // This handles auto-login and avoids the crash
               bot.on('messagestr', (msg) => {
                   const lowMsg = msg.toLowerCase();
                   if (lowMsg.includes('register')) bot.chat(`/register ${password} ${password}`);
-                  else if (lowMsg.includes('login')) bot.chat(`/login ${password}`);
+                  else if (lowMsg.includes('login') || lowMsg.includes('log in')) bot.chat(`/login ${password}`);
               });
 
               bot.once('spawn', () => {
-                  console.log('[SPAWN] Bot online');
+                  console.log('[SPAWN] Bot spawned, starting anti-AFK');
                   startAntiAfk();
               });
 
@@ -82,12 +83,12 @@ jobs:
                   const elapsed = Date.now() - startTime;
                   if (elapsed >= TRIGGER_MS && !nextRunTriggered) {
                       nextRunTriggered = true;
-                      console.log('[TRIGGER] 5h 42m reached - Signalling next run');
+                      console.log('[TRIGGER] Signalling next run...');
                       fs.writeFileSync('.trigger_next_run', 'true');
                   }
                   if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
                       shutdownInitiated = true;
-                      console.log('[TIMEOUT] 5h 50m - Stopping bot');
+                      console.log('[TIMEOUT] Shutdown initiated');
                       fs.writeFileSync('.shutdown_complete', 'true');
                       try { bot.quit(); } catch (e) {}
                       setTimeout(() => process.exit(0), 2000);
@@ -98,6 +99,7 @@ jobs:
           function startAntiAfk() {
               setInterval(() => {
                   if (!bot || !bot.entity) return;
+                  // Anti-AFK actions
                   bot.setControlState('jump', true);
                   setTimeout(() => bot.setControlState('jump', false), 500);
                   bot.swingArm();
@@ -115,7 +117,7 @@ jobs:
           BOT_PID=$!
           while kill -0 $BOT_PID 2>/dev/null; do
               if [ -f ".trigger_next_run" ]; then
-                  echo "🚀 Triggering next run via API..."
+                  echo "🚀 Dispatching next workflow run..."
                   CURRENT_ATTEMPT="${{ github.event.inputs.resume_attempt || '1' }}"
                   NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
                   
