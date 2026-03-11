@@ -21,21 +21,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
-      - name: Wait for previous run to finish (if applicable)
+      - name: Wait for previous run to finish
         if: github.event.inputs.previous_run_id != ''
         run: |
           PREV_ID="${{ github.event.inputs.previous_run_id }}"
           echo "Waiting for previous run (ID: $PREV_ID) to complete..."
           while true; do
-            STATUS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            # Using your specific secret: GITHUBTOKEN
+            STATUS=$(curl -s -H "Authorization: token ${{ secrets.GITHUBTOKEN }}" \
                -H "Accept: application/vnd.github.v3+json" \
                "https://api.github.com/repos/${{ github.repository }}/actions/runs/$PREV_ID" \
                | jq -r '.status')
-            if [ "$STATUS" = "completed" ]; then
-              echo "✅ Previous run finished. Starting bot now..."
+            if [ "$STATUS" = "completed" ] || [ "$STATUS" = "null" ]; then
+              echo "✅ Previous run finished or not found. Starting..."
               break
             fi
-            sleep 10
+            sleep 20
           done
 
       - uses: actions/checkout@v4
@@ -57,8 +58,8 @@ jobs:
           };
           const password = 'afkbot';
           const startTime = Date.now();
-          const RUNTIME_MS = 5.83 * 60 * 60 * 1000; // ~5 hours 50 mins
-          const TRIGGER_MS = 5.7 * 60 * 60 * 1000;  // Trigger next run at ~5 hours 42 mins
+          const RUNTIME_MS = 5.83 * 60 * 60 * 1000; // 5h 50m
+          const TRIGGER_MS = 5.7 * 60 * 60 * 1000;  // 5h 42m
           
           let shutdownInitiated = false;
           let nextRunTriggered = false;
@@ -67,7 +68,6 @@ jobs:
           function startBot() {
               bot = mineflayer.createBot(botOptions);
               
-              // This handles auto-login and avoids the crash
               bot.on('messagestr', (msg) => {
                   const lowMsg = msg.toLowerCase();
                   if (lowMsg.includes('register')) bot.chat(`/register ${password} ${password}`);
@@ -75,7 +75,7 @@ jobs:
               });
 
               bot.once('spawn', () => {
-                  console.log('[SPAWN] Bot spawned, starting anti-AFK');
+                  console.log('[SPAWN] Bot online and AFK started');
                   startAntiAfk();
               });
 
@@ -83,25 +83,26 @@ jobs:
                   const elapsed = Date.now() - startTime;
                   if (elapsed >= TRIGGER_MS && !nextRunTriggered) {
                       nextRunTriggered = true;
-                      console.log('[TRIGGER] Signalling next run...');
+                      console.log('[TRIGGER] 5h 42m: Creating trigger file');
                       fs.writeFileSync('.trigger_next_run', 'true');
                   }
                   if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
                       shutdownInitiated = true;
-                      console.log('[TIMEOUT] Shutdown initiated');
-                      fs.writeFileSync('.shutdown_complete', 'true');
+                      console.log('[TIMEOUT] 5h 50m: Shutting down');
                       try { bot.quit(); } catch (e) {}
                       setTimeout(() => process.exit(0), 2000);
                   }
               }, 30000);
+
+              bot.on('error', (err) => console.log('Bot Error: ' + err.message));
+              bot.on('kicked', (reason) => console.log('Bot Kicked: ' + reason));
           }
 
           function startAntiAfk() {
               setInterval(() => {
                   if (!bot || !bot.entity) return;
-                  // Anti-AFK actions
                   bot.setControlState('jump', true);
-                  setTimeout(() => bot.setControlState('jump', false), 500);
+                  setTimeout(() => { if(bot.setControlState) bot.setControlState('jump', false); }, 500);
                   bot.swingArm();
               }, 30000);
           }
@@ -117,11 +118,12 @@ jobs:
           BOT_PID=$!
           while kill -0 $BOT_PID 2>/dev/null; do
               if [ -f ".trigger_next_run" ]; then
-                  echo "🚀 Dispatching next workflow run..."
+                  echo "🚀 Dispatching next workflow run using GITHUBTOKEN..."
                   CURRENT_ATTEMPT="${{ github.event.inputs.resume_attempt || '1' }}"
                   NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
                   
-                  curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                  # Updated to use your specific secret: GITHUBTOKEN
+                  curl -X POST -H "Authorization: token ${{ secrets.GITHUBTOKEN }}" \
                     -H "Accept: application/vnd.github.v3+json" \
                     "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches" \
                     -d "{\"ref\":\"main\", \"inputs\": {\"resume_attempt\": \"$NEXT_ATTEMPT\", \"previous_run_id\": \"${{ github.run_id }}\"}}"
