@@ -15,11 +15,11 @@ permissions:
   contents: read
 env:
   RUNTIME_HOURS: 5
-  OVERLAP_MINUTES: 2
+  OVERLAP_MINUTES: 10
 jobs:
   run-mineflayer:
     runs-on: ubuntu-latest
-    timeout-minutes: 310
+    timeout-minutes: 360
     steps:
       - name: Wait for previous run to finish (if applicable)
         if: github.event.inputs.previous_run_id != ''
@@ -31,21 +31,18 @@ jobs:
                -H "Accept: application/vnd.github.v3+json" \
                "https://api.github.com/repos/${{ github.repository }}/actions/runs/$PREV_ID" \
                | jq -r '.status')
-            echo "Previous run status: $STATUS"
             if [ "$STATUS" = "completed" ]; then
               echo "✅ Previous run finished. Starting bot now..."
               break
-            elif [ "$STATUS" = "null" ] || [ -z "$STATUS" ]; then
-              echo "⚠️ Could not get status, assuming previous run finished"
-              break
             fi
-            echo "⏳ Still waiting... checking again in 5 seconds"
-            sleep 5
+            sleep 10
           done
+
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+
       - name: Create Bot Script
         run: |
           cat << 'EOF' > bot.js
@@ -60,175 +57,75 @@ jobs:
           };
           const password = 'afkbot';
           const startTime = Date.now();
-          const RUNTIME_MS = 5 * 60 * 60 * 1000;
-          const OVERLAP_MS = 2 * 60 * 1000;
+          const RUNTIME_MS = 5.8 * 60 * 60 * 1000; // 5 hours 50 mins
+          const TRIGGER_MS = 5.7 * 60 * 60 * 1000; // Trigger next run at 5 hours 42 mins
+          
           let shutdownInitiated = false;
           let nextRunTriggered = false;
-          let wasKicked = false;
           let bot = null;
-          let afkInterval = null;
-          let hasSpawned = false;
-          let hasLoggedKick = false;
+
           function startBot() {
-              if (shutdownInitiated) return;
               bot = mineflayer.createBot(botOptions);
-              // Changed from 'message' to 'messagestr' to avoid the chat format crash
+              
               bot.on('messagestr', (msg) => {
-                  try {
-                      const lowMsg = msg.toLowerCase();
-                      if (lowMsg.includes('register')) {
-                          bot.chat(`/register ${password} ${password}`);
-                      } else if (lowMsg.includes('login') || lowMsg.includes('log in')) {
-                          bot.chat(`/login ${password}`);
-                      }
-                  } catch (e) {}
+                  const lowMsg = msg.toLowerCase();
+                  if (lowMsg.includes('register')) bot.chat(`/register ${password} ${password}`);
+                  else if (lowMsg.includes('login')) bot.chat(`/login ${password}`);
               });
+
               bot.once('spawn', () => {
-                  if (!hasSpawned) {
-                      console.log('[SPAWN] Bot spawned, starting anti-AFK');
-                      hasSpawned = true;
-                      startAntiAfk();
-                  }
+                  console.log('[SPAWN] Bot online');
+                  startAntiAfk();
               });
-              const checkInterval = setInterval(() => {
+
+              setInterval(() => {
                   const elapsed = Date.now() - startTime;
-                  if (elapsed >= (RUNTIME_MS - OVERLAP_MS) && !nextRunTriggered) {
+                  if (elapsed >= TRIGGER_MS && !nextRunTriggered) {
                       nextRunTriggered = true;
-                      console.log('[TRIGGER] 4h 58m - Starting next workflow');
-                      fs.writeFileSync('.trigger_next_run', process.env.GITHUB_RUN_ID || 'unknown');
+                      console.log('[TRIGGER] 5h 42m reached - Signalling next run');
+                      fs.writeFileSync('.trigger_next_run', 'true');
                   }
                   if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
                       shutdownInitiated = true;
-                      console.log('[TIMEOUT] 5 hours - Disconnecting');
-                      fs.writeFileSync('.shutdown_complete', Date.now().toString());
-                      clearInterval(checkInterval);
-                      if (afkInterval) clearInterval(afkInterval);
-                      try { bot.quit('Scheduled restart'); } catch (e) {}
+                      console.log('[TIMEOUT] 5h 50m - Stopping bot');
+                      fs.writeFileSync('.shutdown_complete', 'true');
+                      try { bot.quit(); } catch (e) {}
                       setTimeout(() => process.exit(0), 2000);
                   }
               }, 30000);
-              bot.on('kicked', (reason) => {
-                  if (!hasLoggedKick) {
-                      console.log(`[KICKED] ${reason}`);
-                      hasLoggedKick = true;
-                  }
-                  wasKicked = true;
-                  if (afkInterval) clearInterval(afkInterval);
-                  setTimeout(() => {
-                      if (!shutdownInitiated) {
-                          wasKicked = false;
-                          startBot();
-                      }
-                  }, 60000);
-              });
-              bot.on('end', () => {
-                  if (afkInterval) clearInterval(afkInterval);
-                  if (wasKicked && !shutdownInitiated) {
-                      wasKicked = false;
-                      startBot();
-                  }
-              });
-              bot.on('error', () => {});
           }
+
           function startAntiAfk() {
-              let tickCount = 0;
-              let circleDirection = 0;
-              afkInterval = setInterval(() => {
-                  try {
-                      if (!bot || !bot.entity || shutdownInitiated) return;
-                      tickCount++;
-                      bot.setControlState('jump', true);
-                      setTimeout(() => {
-                          try { bot.setControlState('jump', false); } catch (e) {}
-                      }, 500);
-                      if (tickCount % 2 === 0) {
-                          switch(circleDirection) {
-                              case 0:
-                                  bot.setControlState('forward', true);
-                                  bot.setControlState('back', false);
-                                  bot.setControlState('left', false);
-                                  bot.setControlState('right', false);
-                                  break;
-                              case 1:
-                                  bot.setControlState('forward', false);
-                                  bot.setControlState('back', false);
-                                  bot.setControlState('left', false);
-                                  bot.setControlState('right', true);
-                                  break;
-                              case 2:
-                                  bot.setControlState('forward', false);
-                                  bot.setControlState('back', true);
-                                  bot.setControlState('left', false);
-                                  bot.setControlState('right', false);
-                                  break;
-                              case 3:
-                                  bot.setControlState('forward', false);
-                                  bot.setControlState('back', false);
-                                  bot.setControlState('left', true);
-                                  bot.setControlState('right', false);
-                                  break;
-                          }
-                          const currentYaw = bot.entity.yaw;
-                          bot.look(currentYaw - (Math.PI / 2), 0, false);
-                          circleDirection = (circleDirection + 1) % 4;
-                          setTimeout(() => {
-                              try {
-                                  bot.setControlState('forward', false);
-                                  bot.setControlState('back', false);
-                                  bot.setControlState('left', false);
-                                  bot.setControlState('right', false);
-                              } catch (e) {}
-                          }, 2000);
-                      }
-                      if (tickCount % 3 === 0) {
-                          bot.swingArm();
-                      }
-                  } catch (e) {}
+              setInterval(() => {
+                  if (!bot || !bot.entity) return;
+                  bot.setControlState('jump', true);
+                  setTimeout(() => bot.setControlState('jump', false), 500);
+                  bot.swingArm();
               }, 30000);
           }
           startBot();
           EOF
+
       - name: Install Mineflayer
         run: npm install mineflayer
+
       - name: Start Bot and Monitor
-        id: bot_run
         run: |
-          echo "=========================================="
-          echo "Starting Bot - Attempt #${{ github.event.inputs.resume_attempt || '1' }}"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Will trigger next run at 4h 58min, shutdown at 5 hours"
-          echo "=========================================="
-          export GITHUB_RUN_ID="${{ github.run_id }}"
           node bot.js &
           BOT_PID=$!
-          NEXT_TRIGGERED=false
           while kill -0 $BOT_PID 2>/dev/null; do
-              if [ -f ".trigger_next_run" ] && [ "$NEXT_TRIGGERED" = "false" ]; then
-                  NEXT_TRIGGERED=true
-                  echo -e "\n[MONITOR] Trigger signal detected! Will trigger next run now..."
-                  echo "${{ github.run_id }}" > .next_run_should_wait_for
+              if [ -f ".trigger_next_run" ]; then
+                  echo "🚀 Triggering next run via API..."
+                  CURRENT_ATTEMPT="${{ github.event.inputs.resume_attempt || '1' }}"
+                  NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
+                  
+                  curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                    -H "Accept: application/vnd.github.v3+json" \
+                    "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches" \
+                    -d "{\"ref\":\"main\", \"inputs\": {\"resume_attempt\": \"$NEXT_ATTEMPT\", \"previous_run_id\": \"${{ github.run_id }}\"}}"
+                  
+                  rm .trigger_next_run
               fi
-              sleep 1
+              sleep 30
           done
           wait $BOT_PID
-          EXIT_CODE=$?
-          echo "Bot exited with code: $EXIT_CODE"
-          if [ -f ".shutdown_complete" ]; then
-              echo "✅ Clean shutdown detected"
-              exit 0
-          fi
-          exit $EXIT_CODE
-        continue-on-error: true
-      - name: Trigger Next Run (with overlap)
-        if: always()
-        id: trigger_next
-        run: |
-          if [ -f ".trigger_next_run" ] || [ -f ".next_run_should_wait_for" ]; then
-              echo "Triggering next workflow run..."
-              CURRENT_ATTEMPT="${{ github.event.inputs.resume_attempt || '1' }}"
-              NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
-              curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches" \
-                -d "{\"ref\":\"main\", \"inputs\": {\"resume_attempt\": \"$NEXT_ATTEMPT\", \"previous_run_id\": \"${{ github.run_id }}\"}}"
-          fi
