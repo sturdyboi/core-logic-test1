@@ -1,5 +1,5 @@
 name: Mineflayer-AFK-Bot
-on: 
+on:
   workflow_dispatch:
     inputs:
       resume_attempt:
@@ -10,20 +10,16 @@ on:
         description: 'Previous run ID to wait for'
         required: false
         default: ''
-
 permissions:
   actions: write
   contents: read
-
 env:
   RUNTIME_HOURS: 5
   OVERLAP_MINUTES: 2
-
 jobs:
   run-mineflayer:
     runs-on: ubuntu-latest
     timeout-minutes: 310
-
     steps:
       - name: Wait for previous run to finish (if applicable)
         if: github.event.inputs.previous_run_id != ''
@@ -31,7 +27,10 @@ jobs:
           PREV_ID="${{ github.event.inputs.previous_run_id }}"
           echo "Waiting for previous run (ID: $PREV_ID) to complete..."
           while true; do
-            STATUS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"               -H "Accept: application/vnd.github.v3+json"               "https://api.github.com/repos/${{ github.repository }}/actions/runs/$PREV_ID"               | jq -r '.status')
+            STATUS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3+json" \
+               "https://api.github.com/repos/${{ github.repository }}/actions/runs/$PREV_ID" \
+               | jq -r '.status')
             echo "Previous run status: $STATUS"
             if [ "$STATUS" = "completed" ]; then
               echo "✅ Previous run finished. Starting bot now..."
@@ -47,7 +46,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
       - name: Create Bot Script
         run: |
           cat << 'EOF' > bot.js
@@ -74,12 +72,13 @@ jobs:
           function startBot() {
               if (shutdownInitiated) return;
               bot = mineflayer.createBot(botOptions);
-              bot.on('message', (message) => {
+              // Changed from 'message' to 'messagestr' to avoid the chat format crash
+              bot.on('messagestr', (msg) => {
                   try {
-                      const msg = message.toString().toLowerCase();
-                      if (msg.includes('register')) {
+                      const lowMsg = msg.toLowerCase();
+                      if (lowMsg.includes('register')) {
                           bot.chat(`/register ${password} ${password}`);
-                      } else if (msg.includes('login') || msg.includes('log in')) {
+                      } else if (lowMsg.includes('login') || lowMsg.includes('log in')) {
                           bot.chat(`/login ${password}`);
                       }
                   } catch (e) {}
@@ -138,12 +137,10 @@ jobs:
                   try {
                       if (!bot || !bot.entity || shutdownInitiated) return;
                       tickCount++;
-                      // Every 30 seconds: Jump
                       bot.setControlState('jump', true);
                       setTimeout(() => {
                           try { bot.setControlState('jump', false); } catch (e) {}
                       }, 500);
-                      // Every 60 seconds: Walk in circle
                       if (tickCount % 2 === 0) {
                           switch(circleDirection) {
                               case 0:
@@ -183,7 +180,6 @@ jobs:
                               } catch (e) {}
                           }, 2000);
                       }
-                      // Every 90 seconds: Swing arm (click)
                       if (tickCount % 3 === 0) {
                           bot.swingArm();
                       }
@@ -194,7 +190,6 @@ jobs:
           EOF
       - name: Install Mineflayer
         run: npm install mineflayer
-
       - name: Start Bot and Monitor
         id: bot_run
         run: |
@@ -210,7 +205,7 @@ jobs:
           while kill -0 $BOT_PID 2>/dev/null; do
               if [ -f ".trigger_next_run" ] && [ "$NEXT_TRIGGERED" = "false" ]; then
                   NEXT_TRIGGERED=true
-                  echo "\n[MONITOR] Trigger signal detected! Will trigger next run now..."
+                  echo -e "\n[MONITOR] Trigger signal detected! Will trigger next run now..."
                   echo "${{ github.run_id }}" > .next_run_should_wait_for
               fi
               sleep 1
@@ -224,7 +219,6 @@ jobs:
           fi
           exit $EXIT_CODE
         continue-on-error: true
-
       - name: Trigger Next Run (with overlap)
         if: always()
         id: trigger_next
@@ -232,4 +226,9 @@ jobs:
           if [ -f ".trigger_next_run" ] || [ -f ".next_run_should_wait_for" ]; then
               echo "Triggering next workflow run..."
               CURRENT_ATTEMPT="${{ github.event.inputs.resume_attempt || '1' }}"
-              NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1)<response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
+              NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
+              curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches" \
+                -d "{\"ref\":\"main\", \"inputs\": {\"resume_attempt\": \"$NEXT_ATTEMPT\", \"previous_run_id\": \"${{ github.run_id }}\"}}"
+          fi
