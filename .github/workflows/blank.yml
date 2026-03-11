@@ -13,9 +13,6 @@ on:
 permissions:
   actions: write
   contents: read
-env:
-  RUNTIME_HOURS: 5
-  OVERLAP_MINUTES: 10
 jobs:
   run-mineflayer:
     runs-on: ubuntu-latest
@@ -27,13 +24,12 @@ jobs:
           PREV_ID="${{ github.event.inputs.previous_run_id }}"
           echo "Waiting for previous run (ID: $PREV_ID) to complete..."
           while true; do
-            # Using your specific secret: GITHUBTOKEN
             STATUS=$(curl -s -H "Authorization: token ${{ secrets.GITHUBTOKEN }}" \
                -H "Accept: application/vnd.github.v3+json" \
                "https://api.github.com/repos/${{ github.repository }}/actions/runs/$PREV_ID" \
                | jq -r '.status')
             if [ "$STATUS" = "completed" ] || [ "$STATUS" = "null" ]; then
-              echo "✅ Previous run finished or not found. Starting..."
+              echo "✅ Previous run finished. Starting bot..."
               break
             fi
             sleep 20
@@ -58,10 +54,9 @@ jobs:
           };
           const password = 'afkbot';
           const startTime = Date.now();
-          const RUNTIME_MS = 5.83 * 60 * 60 * 1000; // 5h 50m
-          const TRIGGER_MS = 5.7 * 60 * 60 * 1000;  // 5h 42m
+          const RUNTIME_MS = 5.83 * 60 * 60 * 1000; 
+          const TRIGGER_MS = 5.7 * 60 * 60 * 1000;  
           
-          let shutdownInitiated = false;
           let nextRunTriggered = false;
           let bot = null;
 
@@ -75,7 +70,7 @@ jobs:
               });
 
               bot.once('spawn', () => {
-                  console.log('[SPAWN] Bot online and AFK started');
+                  console.log('[SPAWN] Bot online');
                   startAntiAfk();
               });
 
@@ -83,27 +78,49 @@ jobs:
                   const elapsed = Date.now() - startTime;
                   if (elapsed >= TRIGGER_MS && !nextRunTriggered) {
                       nextRunTriggered = true;
-                      console.log('[TRIGGER] 5h 42m: Creating trigger file');
                       fs.writeFileSync('.trigger_next_run', 'true');
                   }
-                  if (elapsed >= RUNTIME_MS && !shutdownInitiated) {
-                      shutdownInitiated = true;
-                      console.log('[TIMEOUT] 5h 50m: Shutting down');
+                  if (elapsed >= RUNTIME_MS) {
                       try { bot.quit(); } catch (e) {}
                       setTimeout(() => process.exit(0), 2000);
                   }
               }, 30000);
-
-              bot.on('error', (err) => console.log('Bot Error: ' + err.message));
-              bot.on('kicked', (reason) => console.log('Bot Kicked: ' + reason));
           }
 
           function startAntiAfk() {
+              let tickCount = 0;
+              let circleDirection = 0;
               setInterval(() => {
                   if (!bot || !bot.entity) return;
+                  tickCount++;
+
+                  // Jump every 30s
                   bot.setControlState('jump', true);
-                  setTimeout(() => { if(bot.setControlState) bot.setControlState('jump', false); }, 500);
-                  bot.swingArm();
+                  setTimeout(() => { try { bot.setControlState('jump', false); } catch(e){} }, 500);
+
+                  // Walk in circle logic
+                  if (tickCount % 2 === 0) {
+                      bot.setControlState('forward', circleDirection === 0);
+                      bot.setControlState('right', circleDirection === 1);
+                      bot.setControlState('back', circleDirection === 2);
+                      bot.setControlState('left', circleDirection === 3);
+
+                      const currentYaw = bot.entity.yaw;
+                      bot.look(currentYaw - (Math.PI / 2), 0, false);
+                      circleDirection = (circleDirection + 1) % 4;
+
+                      setTimeout(() => {
+                          try {
+                              bot.setControlState('forward', false);
+                              bot.setControlState('back', false);
+                              bot.setControlState('left', false);
+                              bot.setControlState('right', false);
+                          } catch (e) {}
+                      }, 2000);
+                  }
+
+                  // Swing arm
+                  if (tickCount % 3 === 0) bot.swingArm();
               }, 30000);
           }
           startBot();
@@ -118,11 +135,10 @@ jobs:
           BOT_PID=$!
           while kill -0 $BOT_PID 2>/dev/null; do
               if [ -f ".trigger_next_run" ]; then
-                  echo "🚀 Dispatching next workflow run using GITHUBTOKEN..."
+                  echo "🚀 Dispatching next run..."
                   CURRENT_ATTEMPT="${{ github.event.inputs.resume_attempt || '1' }}"
                   NEXT_ATTEMPT=$((CURRENT_ATTEMPT + 1))
                   
-                  # Updated to use your specific secret: GITHUBTOKEN
                   curl -X POST -H "Authorization: token ${{ secrets.GITHUBTOKEN }}" \
                     -H "Accept: application/vnd.github.v3+json" \
                     "https://api.github.com/repos/${{ github.repository }}/actions/workflows/blank.yml/dispatches" \
