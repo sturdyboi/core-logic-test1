@@ -59,7 +59,7 @@ jobs:
 
       - name: Create Bot Script
         run: |
-          cat > bot.js << 'BOTFILEEND'
+          cat > bot.js << 'EOF'
           const mineflayer = require("mineflayer");
           const fs = require("fs");
 
@@ -236,4 +236,4 @@ jobs:
                       if (tickCount % 2 === 0) {
                           switch(circleDirection) {
                               case 0:
-    <response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
+           <response clipped><NOTE>Result is longer than **10000 characters**, will be **truncated**.</NOTE>
